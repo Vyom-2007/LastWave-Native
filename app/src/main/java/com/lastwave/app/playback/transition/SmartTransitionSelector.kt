@@ -97,22 +97,17 @@ object SmartTransitionSelector {
             )
         }
 
-        // 4. Smooth Blend: Compatible tempo, compatible energy, and matched loudness
-        val isTempoCompatible = bpmDiff != null && bpmDiff <= MAX_BPM_DIFF_SMOOTH
-        val isEnergyCompatible = energyDiff != null && energyDiff <= MAX_ENERGY_DIFF_SMOOTH
-        val isLoudnessCompatible = loudnessDiff == null || loudnessDiff <= MAX_LOUDNESS_DIFF_SMOOTH_DB
-
-        if (isTempoCompatible && isEnergyCompatible && isLoudnessCompatible) {
-            return TransitionPlan(
-                type = TransitionType.SMOOTH_BLEND,
-                durationMs = crossfadeDurationMs.coerceAtLeast(1000L),
-                silenceGapMs = 0L,
-                outgoingBassCutDb = DEFAULT_BASS_CUT_DB,
-                isFallback = false
-            )
-        }
-
-        // 5. Default/Ambiguous: Fallback to standard crossfade
-        return TransitionPlan.fallback(crossfadeDurationMs)
+        // 4. Smooth Blend (Intelligent Frequency-Aware Crossfade):
+        // When Smart Transitions is enabled, applies dynamic low-frequency attenuation (-8dB)
+        // on the outgoing track's native equalizer. This clears acoustic headroom for the incoming
+        // track's rhythm section, giving an audibly distinct, polished DJ handoff rather than a
+        // plain volume overlay.
+        return TransitionPlan(
+            type = TransitionType.SMOOTH_BLEND,
+            durationMs = crossfadeDurationMs.coerceAtLeast(1000L),
+            silenceGapMs = 0L,
+            outgoingBassCutDb = DEFAULT_BASS_CUT_DB,
+            isFallback = false
+        )
     }
 }

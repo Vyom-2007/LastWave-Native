@@ -65,7 +65,7 @@ class SmartTransitionSelectorTest {
     }
 
     @Test
-    fun whenMetadataMissing_returnsFallback() {
+    fun whenMetadataMissing_selectsSmoothBlend() {
         val outgoing = TrackTransitionMetadata(trackId = "stream_1")
         val incoming = TrackTransitionMetadata(trackId = "stream_2")
 
@@ -76,8 +76,10 @@ class SmartTransitionSelectorTest {
             enabled = true
         )
 
-        assertThat(plan.type).isEqualTo(TransitionType.FALLBACK_CROSSFADE)
-        assertThat(plan.isFallback).isTrue()
+        assertThat(plan.type).isEqualTo(TransitionType.SMOOTH_BLEND)
+        assertThat(plan.durationMs).isEqualTo(defaultCrossfadeMs)
+        assertThat(plan.outgoingBassCutDb).isEqualTo(-8.0f)
+        assertThat(plan.isFallback).isFalse()
     }
 
     @Test
@@ -219,7 +221,7 @@ class SmartTransitionSelectorTest {
     }
 
     @Test
-    fun whenAmbiguousMetrics_safelyFallsBackToCrossfade() {
+    fun whenAmbiguousMetrics_selectsSmoothBlend() {
         val outgoing = TrackTransitionMetadata(
             trackId = "track_a",
             bpm = 100.0f,
@@ -238,7 +240,9 @@ class SmartTransitionSelectorTest {
             enabled = true
         )
 
-        assertThat(plan.type).isEqualTo(TransitionType.FALLBACK_CROSSFADE)
-        assertThat(plan.isFallback).isTrue()
+        assertThat(plan.type).isEqualTo(TransitionType.SMOOTH_BLEND)
+        assertThat(plan.durationMs).isEqualTo(defaultCrossfadeMs)
+        assertThat(plan.outgoingBassCutDb).isEqualTo(-8.0f)
+        assertThat(plan.isFallback).isFalse()
     }
 }

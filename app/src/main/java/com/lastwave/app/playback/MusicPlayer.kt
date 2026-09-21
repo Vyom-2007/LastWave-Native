@@ -1202,7 +1202,7 @@ class MusicPlayer @Inject constructor(
                 }
                 if (playerDelegate.isInitialized()) {
                     onMain {
-                        if (!crossfadeEnabled || bitPerfectEnabled) cancelCrossfade()
+                        if ((!crossfadeEnabled && !smartTransitionsEnabled) || bitPerfectEnabled) cancelCrossfade()
                         if (bitPerfectEnabled) {
                             // Bulletproofing: tempo stretch resamples and any
                             // leftover fade gain scales samples — both defeat
@@ -1766,7 +1766,14 @@ class MusicPlayer @Inject constructor(
     @MainThread
     private fun cancelCrossfade() {
         if (!playerDelegate.isInitialized()) return
-        smartTransitionCoordinator.cancel(player, outgoingPlayer, secondaryNativeEngine)
+        val outgoing = outgoingPlayer
+        val outgoingEngine = if (outgoing === secondaryPlayer) secondaryNativeEngine else nativeAudioEngine.get()
+        smartTransitionCoordinator.cancel(player, outgoing, outgoingEngine)
+        runCatching {
+            val flatGains = FloatArray(15) { 0f }
+            nativeAudioEngine.get().setEqualizer(enabled = false, gainsDb = flatGains)
+            secondaryNativeEngine?.setEqualizer(enabled = false, gainsDb = flatGains)
+        }
         outgoingPlayer = null
         val standby = if (player === secondaryPlayer) playerDelegate.value else secondaryPlayer
         standby?.stop()
@@ -1777,15 +1784,16 @@ class MusicPlayer @Inject constructor(
     }
 
     @MainThread
-    private fun updateCrossfade(positionMs: Long): Boolean {
-        if (!crossfadeEnabled || bitPerfectEnabled) return false
+    private fun updateCrossfade(positionMs: Long, durationMs: Long): Boolean {
+        if ((!crossfadeEnabled && !smartTransitionsEnabled) || bitPerfectEnabled) return false
         outgoingPlayer?.let { outgoing ->
             if (outgoing.playbackState == Player.STATE_ENDED || outgoing.playerError != null) {
                 cancelCrossfade()
                 return false
             }
             if (smartTransitionsEnabled && smartTransitionCoordinator.isActive) {
-                if (smartTransitionCoordinator.onTick(player, outgoing, secondaryNativeEngine)) {
+                val outgoingEngine = if (outgoing === secondaryPlayer) secondaryNativeEngine else nativeAudioEngine.get()
+                if (smartTransitionCoordinator.onTick(player, outgoing, outgoingEngine)) {
                     cancelCrossfade()
                 }
             } else {
@@ -1882,6 +1890,7 @@ class MusicPlayer @Inject constructor(
                     isSeekable = track.playbackUrl?.startsWith("file:") == true || track.playbackUrl?.startsWith("content:") == true
                 )
             }
+            val outgoingEngine = if (outgoing === secondaryPlayer) secondaryNativeEngine else nativeAudioEngine.get()
             smartTransitionCoordinator.startTransition(
                 outgoingMeta = outgoingMeta,
                 incomingMeta = incomingMeta,
@@ -1890,7 +1899,7 @@ class MusicPlayer @Inject constructor(
                 enabled = smartTransitionsEnabled,
                 incoming = standby,
                 outgoing = outgoing,
-                outgoingEngine = secondaryNativeEngine
+                outgoingEngine = outgoingEngine
             )
         }
         standby.play()

@@ -927,14 +927,11 @@ fun SettingsScreen(
                     }
 
                     val isIgnored = BatteryOptimizationHelper.isIgnoringBatteryOptimizations(context)
-                    val totalAudioRows = if (misc.crossfadeEnabled) {
-                        if (isIgnored) 8 else 9
-                    } else {
-                        if (isIgnored) 6 else 7
-                    }
+                    val hasDurationRow = misc.crossfadeEnabled || misc.smartTransitionsEnabled
+                    val totalAudioRows = 7 + (if (hasDurationRow) 1 else 0) + (if (!isIgnored) 1 else 0)
                     SettingsGroup(rowCount = totalAudioRows) { index, position ->
-                        when (index) {
-                            0 -> SettingsActionCard(
+                        when {
+                            index == 0 -> SettingsActionCard(
                                 icon = Icons.Filled.HighQuality,
                                 iconContainer = MaterialTheme.colorScheme.primaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -943,7 +940,7 @@ fun SettingsScreen(
                                 onClick = { showQualityDialog = true },
                                 position = position,
                             )
-                            1 -> SettingsActionCard(
+                            index == 1 -> SettingsActionCard(
                                 icon = Icons.Filled.CloudDownload,
                                 iconContainer = MaterialTheme.colorScheme.secondaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -952,7 +949,7 @@ fun SettingsScreen(
                                 onClick = { showDownloadQualityDialog = true },
                                 position = position,
                             )
-                            2 -> SettingsToggleCard(
+                            index == 2 -> SettingsToggleCard(
                                 icon = Icons.Filled.GraphicEq,
                                 iconContainer = MaterialTheme.colorScheme.tertiaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onTertiaryContainer,
@@ -966,7 +963,7 @@ fun SettingsScreen(
                                 onCheckedChange = viewModel::setDolbyAtmosEnabled,
                                 position = position,
                             )
-                            3 -> SettingsToggleCard(
+                            index == 3 -> SettingsToggleCard(
                                 icon = Icons.Filled.Tune,
                                 iconContainer = MaterialTheme.colorScheme.primaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -980,7 +977,7 @@ fun SettingsScreen(
                                 onCheckedChange = viewModel::setBitPerfectEnabled,
                                 position = position,
                             )
-                            4 -> SettingsToggleCard(
+                            index == 4 -> SettingsToggleCard(
                                 icon = Icons.Filled.GraphicEq,
                                 iconContainer = MaterialTheme.colorScheme.tertiaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onTertiaryContainer,
@@ -988,7 +985,7 @@ fun SettingsScreen(
                                 subtitle = if (misc.crossfadeEnabled && misc.isBitPerfectEnabled) {
                                     "Paused while Bit-Perfect is enabled"
                                 } else if (misc.crossfadeEnabled) {
-                                    "Smooth transition between tracks \u2022 ${misc.crossfadeSeconds} sec"
+                                    "Standard volume blend between tracks \u2022 ${misc.crossfadeSeconds} sec"
                                 } else {
                                     "Blend the end of a track into the next one"
                                 },
@@ -996,91 +993,50 @@ fun SettingsScreen(
                                 onCheckedChange = viewModel::setCrossfadeEnabled,
                                 position = position,
                             )
-                            5 -> if (misc.crossfadeEnabled) {
-                                CrossfadeDurationRow(
-                                    seconds = misc.crossfadeSeconds,
-                                    onSecondsChange = viewModel::setCrossfadeSeconds,
-                                    position = position,
-                                )
-                            } else {
-                                SettingsToggleCard(
-                                    icon = Icons.Filled.Lyrics,
-                                    iconContainer = MaterialTheme.colorScheme.secondaryContainer,
-                                    iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
-                                    title = stringResource(R.string.settings_download_lyrics),
-                                    subtitle = if (misc.downloadLyrics) {
-                                        "Save .lrc companion files & embed lyrics in downloads"
-                                    } else {
-                                        "Do not fetch or save lyrics when downloading"
-                                    },
-                                    checked = misc.downloadLyrics,
-                                    onCheckedChange = viewModel::setDownloadLyrics,
-                                    position = position,
-                                )
-                            }
-                            6 -> if (misc.crossfadeEnabled) {
-                                SettingsToggleCard(
-                                    icon = Icons.Filled.AutoAwesome,
-                                    iconContainer = MaterialTheme.colorScheme.primaryContainer,
-                                    iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    title = "Smart Transitions",
-                                    subtitle = if (misc.smartTransitionsEnabled) {
-                                        "Adapts transitions using tempo & energy compatibility"
-                                    } else {
-                                        "Off \u2022 Uses standard crossfade"
-                                    },
-                                    checked = misc.smartTransitionsEnabled,
-                                    onCheckedChange = viewModel::setSmartTransitionsEnabled,
-                                    position = position,
-                                )
-                            } else if (!isIgnored) {
-                                SettingsActionCard(
-                                    icon = Icons.Filled.Bolt,
-                                    iconContainer = MaterialTheme.colorScheme.errorContainer,
-                                    iconTint = MaterialTheme.colorScheme.onErrorContainer,
-                                    title = stringResource(R.string.settings_battery_title),
-                                    subtitle = "Restricted \u2022 Tap to exempt from Samsung Device Care / sleeping apps",
-                                    onClick = { BatteryOptimizationHelper.requestIgnoreBatteryOptimizations(context) },
-                                    position = position,
-                                )
-                            }
-                            7 -> if (misc.crossfadeEnabled) {
-                                SettingsToggleCard(
-                                    icon = Icons.Filled.Lyrics,
-                                    iconContainer = MaterialTheme.colorScheme.secondaryContainer,
-                                    iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
-                                    title = stringResource(R.string.settings_download_lyrics),
-                                    subtitle = if (misc.downloadLyrics) {
-                                        "Save .lrc companion files & embed lyrics in downloads"
-                                    } else {
-                                        "Do not fetch or save lyrics when downloading"
-                                    },
-                                    checked = misc.downloadLyrics,
-                                    onCheckedChange = viewModel::setDownloadLyrics,
-                                    position = position,
-                                )
-                            } else if (!isIgnored) {
-                                SettingsActionCard(
-                                    icon = Icons.Filled.Bolt,
-                                    iconContainer = MaterialTheme.colorScheme.errorContainer,
-                                    iconTint = MaterialTheme.colorScheme.onErrorContainer,
-                                    title = stringResource(R.string.settings_battery_title),
-                                    subtitle = "Restricted \u2022 Tap to exempt from Samsung Device Care / sleeping apps",
-                                    onClick = { BatteryOptimizationHelper.requestIgnoreBatteryOptimizations(context) },
-                                    position = position,
-                                )
-                            }
-                            8 -> if (!isIgnored) {
-                                SettingsActionCard(
-                                    icon = Icons.Filled.Bolt,
-                                    iconContainer = MaterialTheme.colorScheme.errorContainer,
-                                    iconTint = MaterialTheme.colorScheme.onErrorContainer,
-                                    title = stringResource(R.string.settings_battery_title),
-                                    subtitle = "Restricted \u2022 Tap to exempt from Samsung Device Care / sleeping apps",
-                                    onClick = { BatteryOptimizationHelper.requestIgnoreBatteryOptimizations(context) },
-                                    position = position,
-                                )
-                            }
+                            index == 5 -> SettingsToggleCard(
+                                icon = Icons.Filled.AutoAwesome,
+                                iconContainer = MaterialTheme.colorScheme.primaryContainer,
+                                iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                title = "Smart Transitions",
+                                subtitle = if (misc.smartTransitionsEnabled && misc.isBitPerfectEnabled) {
+                                    "Paused while Bit-Perfect is enabled"
+                                } else if (misc.smartTransitionsEnabled) {
+                                    "Dynamic DJ handoffs \u2022 Low-end bass dip & energy matching"
+                                } else {
+                                    "Intelligent tempo & frequency-aware track transitions"
+                                },
+                                checked = misc.smartTransitionsEnabled,
+                                onCheckedChange = viewModel::setSmartTransitionsEnabled,
+                                position = position,
+                            )
+                            hasDurationRow && index == 6 -> CrossfadeDurationRow(
+                                seconds = misc.crossfadeSeconds,
+                                onSecondsChange = viewModel::setCrossfadeSeconds,
+                                position = position,
+                            )
+                            index == (if (hasDurationRow) 7 else 6) -> SettingsToggleCard(
+                                icon = Icons.Filled.Lyrics,
+                                iconContainer = MaterialTheme.colorScheme.secondaryContainer,
+                                iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                title = stringResource(R.string.settings_download_lyrics),
+                                subtitle = if (misc.downloadLyrics) {
+                                    "Save .lrc companion files & embed lyrics in downloads"
+                                } else {
+                                    "Do not fetch or save lyrics when downloading"
+                                },
+                                checked = misc.downloadLyrics,
+                                onCheckedChange = viewModel::setDownloadLyrics,
+                                position = position,
+                            )
+                            !isIgnored && index == (if (hasDurationRow) 8 else 7) -> SettingsActionCard(
+                                icon = Icons.Filled.Bolt,
+                                iconContainer = MaterialTheme.colorScheme.errorContainer,
+                                iconTint = MaterialTheme.colorScheme.onErrorContainer,
+                                title = stringResource(R.string.settings_battery_title),
+                                subtitle = "Restricted \u2022 Tap to exempt from Samsung Device Care / sleeping apps",
+                                onClick = { BatteryOptimizationHelper.requestIgnoreBatteryOptimizations(context) },
+                                position = position,
+                            )
                         }
                     }
                 }
@@ -2291,7 +2247,7 @@ private fun CrossfadeDurationRow(
                 )
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("Crossfade duration", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                    Text("Transition duration", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
                     Text(
                         "${sliderValue.roundToInt()}s \u2022 $blendStyle",
                         style = MaterialTheme.typography.bodySmall,
