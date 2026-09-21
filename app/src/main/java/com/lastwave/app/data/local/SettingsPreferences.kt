@@ -113,6 +113,9 @@ data class MiscSettings(
     val crossfadeEnabled: Boolean = false,
     /** Crossfade length in seconds; kept within the native settings slider range. */
     val crossfadeSeconds: Int = 5,
+    /** When true, automatically selects context-appropriate transitions (Smooth Blend, Impact Drop, Hook Bridge).
+     *  When false (default), uses standard equal-power crossfade. */
+    val smartTransitionsEnabled: Boolean = false,
     /** When true (default), uses the multi-layer dynamic wavy seekbar.
      *  When false, uses the classic standard progress slider in the player tab. */
     val wavySeekbarEnabled: Boolean = true,
@@ -222,6 +225,7 @@ class SettingsPreferences @Inject constructor(
         val LYRICS_PROVIDER = stringPreferencesKey("lw_lyrics_provider")
         val CROSSFADE_ENABLED = booleanPreferencesKey("lw_crossfade_enabled")
         val CROSSFADE_SECONDS = intPreferencesKey("lw_crossfade_seconds")
+        val SMART_TRANSITIONS_ENABLED = booleanPreferencesKey("lw_smart_transitions_enabled")
         val WAVY_SEEKBAR_ENABLED = booleanPreferencesKey("lw_wavy_seekbar_enabled")
         val DOWNLOAD_LYRICS = booleanPreferencesKey("lw_download_lyrics")
         val APP_LANGUAGE = stringPreferencesKey("lw_app_language")
@@ -256,6 +260,7 @@ class SettingsPreferences @Inject constructor(
                 lyricsProvider = LyricsProvider.fromId(p.readSafely(Keys.LYRICS_PROVIDER)),
                 crossfadeEnabled = p.readSafely(Keys.CROSSFADE_ENABLED) ?: false,
                 crossfadeSeconds = (p.readSafely(Keys.CROSSFADE_SECONDS) ?: 5).coerceIn(1, 12),
+                smartTransitionsEnabled = p.readSafely(Keys.SMART_TRANSITIONS_ENABLED) ?: false,
                 wavySeekbarEnabled = p.readSafely(Keys.WAVY_SEEKBAR_ENABLED) ?: true,
                 downloadLyrics = p.readSafely(Keys.DOWNLOAD_LYRICS) ?: true,
                 appLanguageTag = AppLanguage.fromTag(p.readSafely(Keys.APP_LANGUAGE)).tag,
@@ -346,6 +351,10 @@ class SettingsPreferences @Inject constructor(
 
     suspend fun setCrossfadeSeconds(seconds: Int) {
         dataStore.edit { it[Keys.CROSSFADE_SECONDS] = seconds.coerceIn(1, 12) }
+    }
+
+    suspend fun setSmartTransitionsEnabled(enabled: Boolean) {
+        dataStore.edit { it[Keys.SMART_TRANSITIONS_ENABLED] = enabled }
     }
 
     suspend fun setWavySeekbarEnabled(enabled: Boolean) {

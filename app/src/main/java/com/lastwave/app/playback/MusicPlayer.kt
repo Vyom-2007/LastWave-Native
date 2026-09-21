@@ -316,6 +316,9 @@ class MusicPlayer @Inject constructor(
     private var crossfadeEnabled = false
     @Volatile
     private var crossfadeDurationMs = 5_000L
+    @Volatile
+    private var smartTransitionsEnabled = false
+    private val smartTransitionCoordinator = com.lastwave.app.playback.transition.SmartTransitionCoordinator()
     private var activePlayer: ExoPlayer? = null
     private var secondaryPlayer: ExoPlayer? = null
     private var secondaryNativeEngine: NativeAudioEngine? = null
@@ -1180,6 +1183,7 @@ class MusicPlayer @Inject constructor(
             settingsPreferences.settings.collect { settings ->
                 crossfadeEnabled = settings.crossfadeEnabled
                 crossfadeDurationMs = settings.crossfadeSeconds.coerceIn(1, 12) * 1000L
+                smartTransitionsEnabled = settings.smartTransitionsEnabled
                 val wasBitPerfect = bitPerfectEnabled
                 bitPerfectEnabled = settings.isBitPerfectEnabled
                 updateBitPerfectState()
@@ -1762,6 +1766,7 @@ class MusicPlayer @Inject constructor(
     @MainThread
     private fun cancelCrossfade() {
         if (!playerDelegate.isInitialized()) return
+        smartTransitionCoordinator.cancel(player, outgoingPlayer, secondaryNativeEngine)
         outgoingPlayer = null
         val standby = if (player === secondaryPlayer) playerDelegate.value else secondaryPlayer
         standby?.stop()
@@ -1775,14 +1780,24 @@ class MusicPlayer @Inject constructor(
     private fun updateCrossfade(positionMs: Long): Boolean {
         if (!crossfadeEnabled || bitPerfectEnabled) return false
         outgoingPlayer?.let { outgoing ->
-            val progress = (positionMs.toFloat() / overlapDurationMs.coerceAtLeast(1L)).coerceIn(0f, 1f)
-            if (progress >= 1f || outgoing.playbackState == Player.STATE_ENDED || outgoing.playerError != null) {
+            if (outgoing.playbackState == Player.STATE_ENDED || outgoing.playerError != null) {
                 cancelCrossfade()
+                return false
+            }
+            if (smartTransitionsEnabled && smartTransitionCoordinator.isActive) {
+                if (smartTransitionCoordinator.onTick(player, outgoing, secondaryNativeEngine)) {
+                    cancelCrossfade()
+                }
             } else {
-                val angle = progress * (Math.PI / 2.0)
-                player.volume = kotlin.math.sin(angle).toFloat()
-                outgoing.volume = kotlin.math.cos(angle).toFloat()
-                outgoing.playWhenReady = player.isPlaying
+                val progress = (positionMs.toFloat() / overlapDurationMs.coerceAtLeast(1L)).coerceIn(0f, 1f)
+                if (progress >= 1f) {
+                    cancelCrossfade()
+                } else {
+                    val angle = progress * (Math.PI / 2.0)
+                    player.volume = kotlin.math.sin(angle).toFloat()
+                    outgoing.volume = kotlin.math.cos(angle).toFloat()
+                    outgoing.playWhenReady = player.isPlaying
+                }
             }
             return false
         }
@@ -1852,6 +1867,32 @@ class MusicPlayer @Inject constructor(
         activePlayer = standby
         standby.addListener(listener)
         standby.setAudioAttributes(standby.audioAttributes, true)
+        if (smartTransitionsEnabled) {
+            val outgoingMeta = _state.value.current?.let { track ->
+                com.lastwave.app.playback.transition.TrackTransitionMetadata(
+                    trackId = track.videoId ?: track.title,
+                    durationMs = remainingMs + positionMs,
+                    isSeekable = track.playbackUrl?.startsWith("file:") == true || track.playbackUrl?.startsWith("content:") == true
+                )
+            }
+            val incomingMeta = standby.currentMediaItem?.toPlayableTrack()?.let { track ->
+                com.lastwave.app.playback.transition.TrackTransitionMetadata(
+                    trackId = track.videoId ?: track.title,
+                    durationMs = standby.duration.coerceAtLeast(0L),
+                    isSeekable = track.playbackUrl?.startsWith("file:") == true || track.playbackUrl?.startsWith("content:") == true
+                )
+            }
+            smartTransitionCoordinator.startTransition(
+                outgoingMeta = outgoingMeta,
+                incomingMeta = incomingMeta,
+                crossfadeDurationMs = fadeMs,
+                overlapDurationMs = overlapDurationMs,
+                enabled = smartTransitionsEnabled,
+                incoming = standby,
+                outgoing = outgoing,
+                outgoingEngine = secondaryNativeEngine
+            )
+        }
         standby.play()
         listener.onMediaItemTransition(standby.currentMediaItem, Player.MEDIA_ITEM_TRANSITION_REASON_AUTO)
         refresh(standby)
