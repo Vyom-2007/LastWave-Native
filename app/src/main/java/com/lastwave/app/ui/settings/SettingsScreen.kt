@@ -928,7 +928,7 @@ fun SettingsScreen(
 
                     val isIgnored = BatteryOptimizationHelper.isIgnoringBatteryOptimizations(context)
                     val totalAudioRows = if (misc.crossfadeEnabled) {
-                        if (isIgnored) 7 else 8
+                        if (isIgnored) 8 else 9
                     } else {
                         if (isIgnored) 6 else 7
                     }
@@ -1020,6 +1020,32 @@ fun SettingsScreen(
                             }
                             6 -> if (misc.crossfadeEnabled) {
                                 SettingsToggleCard(
+                                    icon = Icons.Filled.AutoAwesome,
+                                    iconContainer = MaterialTheme.colorScheme.primaryContainer,
+                                    iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    title = "Smart Transitions",
+                                    subtitle = if (misc.smartTransitionsEnabled) {
+                                        "Adapts transitions using tempo & energy compatibility"
+                                    } else {
+                                        "Off \u2022 Uses standard crossfade"
+                                    },
+                                    checked = misc.smartTransitionsEnabled,
+                                    onCheckedChange = viewModel::setSmartTransitionsEnabled,
+                                    position = position,
+                                )
+                            } else if (!isIgnored) {
+                                SettingsActionCard(
+                                    icon = Icons.Filled.Bolt,
+                                    iconContainer = MaterialTheme.colorScheme.errorContainer,
+                                    iconTint = MaterialTheme.colorScheme.onErrorContainer,
+                                    title = stringResource(R.string.settings_battery_title),
+                                    subtitle = "Restricted \u2022 Tap to exempt from Samsung Device Care / sleeping apps",
+                                    onClick = { BatteryOptimizationHelper.requestIgnoreBatteryOptimizations(context) },
+                                    position = position,
+                                )
+                            }
+                            7 -> if (misc.crossfadeEnabled) {
+                                SettingsToggleCard(
                                     icon = Icons.Filled.Lyrics,
                                     iconContainer = MaterialTheme.colorScheme.secondaryContainer,
                                     iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -1044,7 +1070,7 @@ fun SettingsScreen(
                                     position = position,
                                 )
                             }
-                            7 -> if (!isIgnored) {
+                            8 -> if (!isIgnored) {
                                 SettingsActionCard(
                                     icon = Icons.Filled.Bolt,
                                     iconContainer = MaterialTheme.colorScheme.errorContainer,

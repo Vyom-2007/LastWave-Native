@@ -481,6 +481,9 @@ class SettingsViewModel @Inject constructor(
     fun setCrossfadeSeconds(seconds: Int) = launchSettingsAction("update crossfade duration") {
         settingsPreferences.setCrossfadeSeconds(seconds.coerceIn(1, 12))
     }
+    fun setSmartTransitionsEnabled(enabled: Boolean) = launchSettingsAction("update smart transitions") {
+        settingsPreferences.setSmartTransitionsEnabled(enabled)
+    }
     fun setWavySeekbarEnabled(enabled: Boolean) = launchSettingsAction("update seekbar style") {
         settingsPreferences.setWavySeekbarEnabled(enabled)
     }
