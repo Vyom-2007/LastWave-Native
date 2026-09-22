@@ -1924,6 +1924,7 @@ class MusicPlayer @Inject constructor(
                     trackId = outgoingId,
                     durationMs = remainingMs + positionMs,
                     energy = cachedOut?.energy,
+                    bpm = cachedOut?.bpm,
                     loudnessDb = cachedOut?.loudnessDb,
                     isSeekable = isOutgoingSeekable
                 )
@@ -1931,12 +1932,13 @@ class MusicPlayer @Inject constructor(
             val incomingMeta = standby.currentMediaItem?.toPlayableTrack()?.let { track ->
                 val incomingId = track.videoId ?: track.title
                 val isSeekable = track.playbackUrl?.startsWith("file:") == true || track.playbackUrl?.startsWith("content:") == true
-                // Phase 2: Query streaming analysis cache for energy/loudness
+                // Phase 2: Query streaming analysis cache for energy/loudness/bpm
                 val cachedMeta = if (!isSeekable) streamingMetadataCache.get(incomingId) else null
                 com.lastwave.app.playback.transition.TrackTransitionMetadata(
                     trackId = incomingId,
                     durationMs = standby.duration.coerceAtLeast(0L),
                     energy = cachedMeta?.energy,
+                    bpm = cachedMeta?.bpm,
                     loudnessDb = cachedMeta?.loudnessDb,
                     isSeekable = isSeekable
                 )
@@ -1955,8 +1957,8 @@ class MusicPlayer @Inject constructor(
             android.util.Log.i(
                 "SmartTransition",
                 "START TRANSITION: type=${plan.type}, duration=${plan.durationMs}ms, bassCut=${plan.outgoingBassCutDb}dB, " +
-                    "outgoing=${outgoingMeta?.trackId}(energy=${outgoingMeta?.energy}), " +
-                    "incoming=${incomingMeta?.trackId}(energy=${incomingMeta?.energy})"
+                    "outgoing=${outgoingMeta?.trackId}(energy=${outgoingMeta?.energy}, bpm=${outgoingMeta?.bpm}), " +
+                    "incoming=${incomingMeta?.trackId}(energy=${incomingMeta?.energy}, bpm=${incomingMeta?.bpm})"
             )
         }
         standby.play()
