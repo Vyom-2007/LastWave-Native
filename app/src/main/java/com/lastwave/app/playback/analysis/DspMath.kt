@@ -316,4 +316,316 @@ object DspMath {
             }
         }
     }
+
+    // ── Phase 2: Streaming Analysis DSP ─────────────────────────────────
+
+    /** Default high-pass cutoff frequency separating "low" from "high" bands. */
+    const val SPECTRAL_SPLIT_HZ = 300.0
+
+    /** Weight of ZCR in the combined energy estimate. */
+    const val ENERGY_WEIGHT_ZCR = 0.4f
+
+    /** Weight of spectral ratio in the combined energy estimate. */
+    const val ENERGY_WEIGHT_SPECTRAL = 0.6f
+
+    /**
+     * Root Mean Square of a window of interleaved Float32 samples.
+     * Non-finite samples are skipped. Returns 0 if no finite samples exist.
+     * Read-only: input array is never written to.
+     */
+    fun rms(
+        samples: FloatArray,
+        offset: Int = 0,
+        length: Int = samples.size - offset,
+    ): Float {
+        require(offset >= 0 && length >= 0 && offset + length <= samples.size) {
+            "Window [$offset, ${offset + length}) is outside ${samples.size} samples"
+        }
+        if (length == 0) return 0f
+        var sumSquares = 0.0
+        var count = 0L
+        for (i in offset until offset + length) {
+            val v = samples[i]
+            if (!v.isFinite()) continue
+            sumSquares += v.toDouble() * v.toDouble()
+            count++
+        }
+        if (count == 0L) return 0f
+        return sqrt(sumSquares / count.toDouble()).toFloat()
+    }
+
+    /**
+     * Convenience: RMS in dBFS, floored at [MIN_DBFS].
+     */
+    fun rmsDb(
+        samples: FloatArray,
+        offset: Int = 0,
+        length: Int = samples.size - offset,
+    ): Float = amplitudeToDbfs(rms(samples, offset, length))
+
+    /**
+     * Zero-Crossing Rate: fraction of consecutive sample pairs where the sign
+     * changes. Normalized to [0, 1]. High ZCR → bright/percussive signal.
+     * Low ZCR → warm/smooth signal. Non-finite samples are treated as zero.
+     * Read-only: input array is never written to.
+     */
+    fun zeroCrossingRate(
+        samples: FloatArray,
+        offset: Int = 0,
+        length: Int = samples.size - offset,
+    ): Float {
+        require(offset >= 0 && length >= 0 && offset + length <= samples.size) {
+            "Window [$offset, ${offset + length}) is outside ${samples.size} samples"
+        }
+        if (length < 2) return 0f
+        var crossings = 0L
+        var prevPositive = samples[offset].let { if (it.isFinite()) it >= 0f else true }
+        for (i in offset + 1 until offset + length) {
+            val v = samples[i]
+            val currentPositive = if (v.isFinite()) v >= 0f else true
+            if (currentPositive != prevPositive) crossings++
+            prevPositive = currentPositive
+        }
+        return (crossings.toFloat() / (length - 1).toFloat()).coerceIn(0f, 1f)
+    }
+
+    /**
+     * Spectral energy ratio: measures the proportion of energy above
+     * [SPECTRAL_SPLIT_HZ] relative to the total signal energy. Uses a
+     * 2nd-order Butterworth high-pass filter ([JvmBiquad.highPass]) to
+     * isolate the high-frequency band.
+     *
+     * Returns a value in [0, 1]:
+     * - High ratio → bright, energetic signal (EDM, rock, hip-hop).
+     * - Low ratio → bass-heavy, warm signal (lo-fi, acoustic, ballad).
+     *
+     * If the total RMS is negligible (< 1e-10), returns 0.5 (neutral).
+     * Read-only: input array is never written to; the filter operates on
+     * an internal copy.
+     *
+     * @param samples Interleaved Float32 PCM.
+     * @param sampleRateHz Sample rate in Hz (e.g. 48000).
+     * @param channelCount Number of interleaved channels (1 or 2).
+     */
+    fun spectralEnergyRatio(
+        samples: FloatArray,
+        sampleRateHz: Int = 48_000,
+        channelCount: Int = 2,
+    ): Float {
+        if (samples.isEmpty()) return 0.5f
+
+        // De-interleave to mono for analysis (average channels).
+        val monoLength = samples.size / channelCount.coerceAtLeast(1)
+        if (monoLength == 0) return 0.5f
+        val mono = FloatArray(monoLength)
+        if (channelCount <= 1) {
+            samples.copyInto(mono, endIndex = monoLength.coerceAtMost(samples.size))
+        } else {
+            for (i in 0 until monoLength) {
+                var sum = 0f
+                for (ch in 0 until channelCount) {
+                    val idx = i * channelCount + ch
+                    if (idx < samples.size) {
+                        val v = samples[idx]
+                        sum += if (v.isFinite()) v else 0f
+                    }
+                }
+                mono[i] = sum / channelCount
+            }
+        }
+
+        // Total RMS
+        val totalRms = rms(mono).toDouble()
+        if (totalRms < 1e-10) return 0.5f
+
+        // High-pass filter to isolate above SPECTRAL_SPLIT_HZ
+        val hp = JvmBiquad.highPass(sampleRateHz.toDouble(), SPECTRAL_SPLIT_HZ, 0.7071067811865476)
+        val highBand = hp.processMono(mono)
+        val highRms = rms(highBand).toDouble()
+
+        return (highRms / totalRms).toFloat().coerceIn(0f, 1f)
+    }
+
+    /**
+     * Combined energy estimate from Zero-Crossing Rate and spectral ratio.
+     * Returns a value in [0, 1] suitable for [TrackTransitionMetadata.energy].
+     *
+     * Formula: `(ENERGY_WEIGHT_ZCR * zcr + ENERGY_WEIGHT_SPECTRAL * spectralRatio)`
+     */
+    fun estimateEnergy(zcr: Float, spectralRatio: Float): Float {
+        val safeZcr = if (zcr.isFinite()) zcr.coerceIn(0f, 1f) else 0f
+        val safeRatio = if (spectralRatio.isFinite()) spectralRatio.coerceIn(0f, 1f) else 0.5f
+        return (ENERGY_WEIGHT_ZCR * safeZcr + ENERGY_WEIGHT_SPECTRAL * safeRatio).coerceIn(0f, 1f)
+    }
+
+    // ── Phase 3: BPM Detection DSP ──────────────────────────────────────
+
+    /** Minimum detectable BPM (60 = 1 beat per second). */
+    const val BPM_MIN = 60.0f
+
+    /** Maximum detectable BPM (200 = fast EDM / drum & bass). */
+    const val BPM_MAX = 200.0f
+
+    /** Hop size for onset envelope computation (~10 ms at 48 kHz). */
+    const val BPM_HOP_SIZE = 512
+
+    /**
+     * Minimum onset envelope peak-to-mean ratio required for a "confident"
+     * BPM estimate. Below this threshold the signal lacks clear beats
+     * (ambient, spoken word, etc.) and `null` is returned.
+     */
+    private const val BPM_CONFIDENCE_THRESHOLD = 1.3f
+
+    /**
+     * Estimates BPM from interleaved Float32 PCM samples using onset
+     * envelope auto-correlation.
+     *
+     * **Algorithm:**
+     * 1. De-interleave to mono (channel average).
+     * 2. Compute short-term energy envelope in [BPM_HOP_SIZE] windows.
+     * 3. Differentiate + half-wave rectify → onset strength signal.
+     * 4. Auto-correlate the onset signal over the BPM range.
+     * 5. Peak-pick the dominant periodicity → convert lag to BPM.
+     *
+     * Returns `null` if the signal is too quiet, too short, or has no
+     * clear rhythmic periodicity (e.g. ambient pads, speech).
+     *
+     * **Computational cost:** ~2-5 ms for 3 seconds of stereo 48 kHz audio.
+     *
+     * @param samples Interleaved Float32 PCM.
+     * @param sampleRateHz Sample rate (e.g. 48000).
+     * @param channelCount Interleaved channels (1 or 2).
+     * @return Estimated BPM in [BPM_MIN]..[BPM_MAX], or null.
+     */
+    fun estimateBpm(
+        samples: FloatArray,
+        sampleRateHz: Int = 48_000,
+        channelCount: Int = 2,
+    ): Float? {
+        if (samples.isEmpty() || sampleRateHz <= 0 || channelCount <= 0) return null
+
+        // De-interleave to mono
+        val monoLength = samples.size / channelCount
+        if (monoLength < BPM_HOP_SIZE * 4) return null // Need at least ~40ms of audio
+        val mono = FloatArray(monoLength)
+        if (channelCount <= 1) {
+            samples.copyInto(mono, endIndex = monoLength.coerceAtMost(samples.size))
+        } else {
+            for (i in 0 until monoLength) {
+                var sum = 0f
+                for (ch in 0 until channelCount) {
+                    val idx = i * channelCount + ch
+                    if (idx < samples.size) {
+                        val v = samples[idx]
+                        sum += if (v.isFinite()) v else 0f
+                    }
+                }
+                mono[i] = sum / channelCount
+            }
+        }
+
+        // Compute onset envelope
+        val envelope = onsetEnvelope(mono, BPM_HOP_SIZE)
+        if (envelope.size < 4) return null
+
+        // Gate: if onset strength is negligible, there are no detectable beats
+        // (silence, continuous tone, ambient). Real click/beat onsets produce
+        // values of 0.3–0.5; continuous tones produce ~0.01 from phase jitter.
+        val maxOnset = envelope.max()
+        if (maxOnset < 0.02f) return null
+
+        // Convert BPM range to lag range (in onset frames)
+        val framesPerSecond = sampleRateHz.toFloat() / BPM_HOP_SIZE
+        val minLag = (framesPerSecond * 60f / BPM_MAX).toInt().coerceAtLeast(1)
+        val maxLag = (framesPerSecond * 60f / BPM_MIN).toInt().coerceAtMost(envelope.size - 1)
+
+        if (minLag >= maxLag || maxLag >= envelope.size) return null
+
+        // Auto-correlate
+        val correlation = autoCorrelate(envelope, minLag, maxLag)
+
+        // Peak-pick: find the lag with maximum correlation
+        var bestLag = minLag
+        var bestVal = Float.NEGATIVE_INFINITY
+        for (lag in correlation.indices) {
+            if (correlation[lag] > bestVal) {
+                bestVal = correlation[lag]
+                bestLag = lag + minLag
+            }
+        }
+
+        // Confidence check: peak must be significantly above mean
+        val mean = correlation.average().toFloat()
+        if (mean <= 0f || bestVal / mean < BPM_CONFIDENCE_THRESHOLD) return null
+
+        // Convert lag (in onset frames) to BPM
+        val bpm = 60f * framesPerSecond / bestLag
+        return if (bpm in BPM_MIN..BPM_MAX) bpm else null
+    }
+
+    /**
+     * Computes an onset strength envelope from mono samples.
+     *
+     * Each frame is the short-term RMS energy over [hopSize] samples.
+     * The envelope is then differentiated (first difference) and half-wave
+     * rectified: only energy *increases* count as onsets.
+     *
+     * @param mono Mono Float32 samples.
+     * @param hopSize Samples per frame (~10ms at 48kHz with 512).
+     * @return Onset strength envelope (one value per frame).
+     */
+    internal fun onsetEnvelope(mono: FloatArray, hopSize: Int): FloatArray {
+        val numFrames = mono.size / hopSize
+        if (numFrames < 2) return FloatArray(0)
+
+        // Short-term energy per frame
+        val energy = FloatArray(numFrames)
+        for (f in 0 until numFrames) {
+            val start = f * hopSize
+            val end = (start + hopSize).coerceAtMost(mono.size)
+            var sumSq = 0.0
+            for (i in start until end) {
+                val v = mono[i]
+                if (v.isFinite()) sumSq += v.toDouble() * v.toDouble()
+            }
+            energy[f] = sqrt(sumSq / (end - start).coerceAtLeast(1).toDouble()).toFloat()
+        }
+
+        // First difference + half-wave rectification (only increases = onsets)
+        val onset = FloatArray(numFrames - 1)
+        for (f in 0 until numFrames - 1) {
+            val diff = energy[f + 1] - energy[f]
+            onset[f] = if (diff > 0f) diff else 0f
+        }
+        return onset
+    }
+
+    /**
+     * Auto-correlation of the onset envelope over the range
+     * [minLag]..[maxLag]. Returns an array of correlation values
+     * indexed as `[0] = correlation at minLag`.
+     *
+     * Uses normalized unbiased auto-correlation:
+     * `R(lag) = sum(onset[i] * onset[i+lag]) / (N - lag)`
+     *
+     * @param envelope Onset strength signal.
+     * @param minLag Minimum lag (inclusive).
+     * @param maxLag Maximum lag (inclusive).
+     * @return Correlation values for each lag in range.
+     */
+    internal fun autoCorrelate(envelope: FloatArray, minLag: Int, maxLag: Int): FloatArray {
+        val n = envelope.size
+        val result = FloatArray(maxLag - minLag + 1)
+        for (lagOffset in result.indices) {
+            val lag = lagOffset + minLag
+            var sum = 0.0
+            val count = n - lag
+            if (count <= 0) continue
+            for (i in 0 until count) {
+                sum += envelope[i].toDouble() * envelope[i + lag].toDouble()
+            }
+            result[lagOffset] = (sum / count).toFloat()
+        }
+        return result
+    }
 }

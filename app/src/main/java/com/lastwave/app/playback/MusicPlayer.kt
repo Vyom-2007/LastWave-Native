@@ -319,6 +319,8 @@ class MusicPlayer @Inject constructor(
     @Volatile
     private var smartTransitionsEnabled = false
     private val smartTransitionCoordinator = com.lastwave.app.playback.transition.SmartTransitionCoordinator()
+    private val streamingMetadataCache = com.lastwave.app.playback.analysis.StreamingMetadataCache()
+    private var streamAnalyzerJob: Job? = null
     private var activePlayer: ExoPlayer? = null
     private var secondaryPlayer: ExoPlayer? = null
     private var secondaryNativeEngine: NativeAudioEngine? = null
@@ -1766,6 +1768,9 @@ class MusicPlayer @Inject constructor(
     @MainThread
     private fun cancelCrossfade() {
         if (!playerDelegate.isInitialized()) return
+        // Cancel any in-flight streaming analysis
+        streamAnalyzerJob?.cancel()
+        streamAnalyzerJob = null
         val outgoing = outgoingPlayer
         val outgoingEngine = if (outgoing === secondaryPlayer) secondaryNativeEngine else nativeAudioEngine.get()
         smartTransitionCoordinator.cancel(player, outgoing, outgoingEngine)
@@ -1845,6 +1850,39 @@ class MusicPlayer @Inject constructor(
             standby.pause()
             standby.setMediaItems(standbyQueue, nextIndex, 0L)
             standby.prepare()
+
+            // Phase 3: Start cache-aware headless stream decoding for non-seekable (YouTube) tracks
+            if (smartTransitionsEnabled) {
+                val incomingTrack = nextItem.toPlayableTrack()
+                val isStreaming = incomingTrack.playbackUrl?.startsWith("file:") != true &&
+                    incomingTrack.playbackUrl?.startsWith("content:") != true
+                val incomingId = incomingTrack.videoId ?: incomingTrack.title
+                if (isStreaming && incomingId != null && streamingMetadataCache.get(incomingId) == null) {
+                    streamAnalyzerJob?.cancel()
+                    android.util.Log.i("StreamAnalyzer", "Starting headless decode for $incomingId")
+                    streamAnalyzerJob = applicationScope.launch(Dispatchers.Default) {
+                        val stream = waitForResolvedStream(incomingId)
+                        if (stream != null) {
+                            val decoder = com.lastwave.app.playback.analysis.HeadlessStreamDecoder()
+                            // Try cache-aware decode first (reads from ExoPlayer's disk cache, ~200ms)
+                            // Falls back to direct URL decode (network-bound, ~7-8s) on cache miss
+                            val audio = decoder.decodeFromCache(
+                                cacheDataSourceFactory, stream.url, stream.cacheKey,
+                                stream.requestHeaders
+                            ) ?: decoder.decode(stream.url, stream.requestHeaders)
+                            if (audio != null) {
+                                val metadata = com.lastwave.app.playback.analysis.StreamAnalyzer.analyzeFromSamples(incomingId, audio)
+                                streamingMetadataCache.put(incomingId, metadata)
+                                android.util.Log.i("StreamAnalyzer", "Headless analysis complete for $incomingId: energy=${metadata.energy}, bpm=${metadata.bpm}, loudness=${metadata.loudnessDb}dB")
+                            } else {
+                                android.util.Log.d("StreamAnalyzer", "Headless decode returned null for $incomingId (safe fallback active)")
+                            }
+                        } else {
+                            android.util.Log.d("StreamAnalyzer", "Stream URL not resolved in time for $incomingId (safe fallback active)")
+                        }
+                    }
+                }
+            }
         }
         if (remainingMs > fadeMs || standby.playbackState != Player.STATE_READY) return false
         // A queue edit during preparation must never start a stale next track.
@@ -1877,21 +1915,34 @@ class MusicPlayer @Inject constructor(
         standby.setAudioAttributes(standby.audioAttributes, true)
         if (smartTransitionsEnabled) {
             val outgoingMeta = _state.value.current?.let { track ->
+                val outgoingId = track.videoId ?: track.title
+                val isOutgoingSeekable = track.playbackUrl?.startsWith("file:") == true ||
+                    track.playbackUrl?.startsWith("content:") == true
+                // Phase 2.5: Query cache for outgoing track energy/loudness
+                val cachedOut = if (!isOutgoingSeekable) streamingMetadataCache.get(outgoingId) else null
                 com.lastwave.app.playback.transition.TrackTransitionMetadata(
-                    trackId = track.videoId ?: track.title,
+                    trackId = outgoingId,
                     durationMs = remainingMs + positionMs,
-                    isSeekable = track.playbackUrl?.startsWith("file:") == true || track.playbackUrl?.startsWith("content:") == true
+                    energy = cachedOut?.energy,
+                    loudnessDb = cachedOut?.loudnessDb,
+                    isSeekable = isOutgoingSeekable
                 )
             }
             val incomingMeta = standby.currentMediaItem?.toPlayableTrack()?.let { track ->
+                val incomingId = track.videoId ?: track.title
+                val isSeekable = track.playbackUrl?.startsWith("file:") == true || track.playbackUrl?.startsWith("content:") == true
+                // Phase 2: Query streaming analysis cache for energy/loudness
+                val cachedMeta = if (!isSeekable) streamingMetadataCache.get(incomingId) else null
                 com.lastwave.app.playback.transition.TrackTransitionMetadata(
-                    trackId = track.videoId ?: track.title,
+                    trackId = incomingId,
                     durationMs = standby.duration.coerceAtLeast(0L),
-                    isSeekable = track.playbackUrl?.startsWith("file:") == true || track.playbackUrl?.startsWith("content:") == true
+                    energy = cachedMeta?.energy,
+                    loudnessDb = cachedMeta?.loudnessDb,
+                    isSeekable = isSeekable
                 )
             }
             val outgoingEngine = if (outgoing === secondaryPlayer) secondaryNativeEngine else nativeAudioEngine.get()
-            smartTransitionCoordinator.startTransition(
+            val plan = smartTransitionCoordinator.startTransition(
                 outgoingMeta = outgoingMeta,
                 incomingMeta = incomingMeta,
                 crossfadeDurationMs = fadeMs,
@@ -1901,11 +1952,40 @@ class MusicPlayer @Inject constructor(
                 outgoing = outgoing,
                 outgoingEngine = outgoingEngine
             )
+            android.util.Log.i(
+                "SmartTransition",
+                "START TRANSITION: type=${plan.type}, duration=${plan.durationMs}ms, bassCut=${plan.outgoingBassCutDb}dB, " +
+                    "outgoing=${outgoingMeta?.trackId}(energy=${outgoingMeta?.energy}), " +
+                    "incoming=${incomingMeta?.trackId}(energy=${incomingMeta?.energy})"
+            )
         }
         standby.play()
         listener.onMediaItemTransition(standby.currentMediaItem, Player.MEDIA_ITEM_TRANSITION_REASON_AUTO)
         refresh(standby)
         return true
+    }
+
+    /**
+     * Polls [preparedStreams] until the stream URL for [videoId] appears,
+     * or returns null after [timeoutMs]. Used by the headless stream decoder
+     * to obtain the resolved YouTube audio URL for background analysis.
+     *
+     * ExoPlayer's [ResolvingDataSource.Factory] resolves placeholders to
+     * actual stream URLs on its loader thread and registers them via
+     * [registerPreparedStream]. This method waits for that registration.
+     */
+    private suspend fun waitForResolvedStream(
+        videoId: String,
+        timeoutMs: Long = 8_000L,
+    ): ResolvedStream? = kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+        while (true) {
+            val match = preparedStreams.values.firstOrNull {
+                it.youtubeCandidate?.videoId == videoId
+            }
+            if (match != null) return@withTimeoutOrNull match
+            kotlinx.coroutines.delay(200L) // Poll at 5 Hz
+        }
+        @Suppress("UNREACHABLE_CODE") null
     }
 
     private fun updateBitPerfectState() {
